@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-layout">
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <h3>👥 Online</h3>
+            <ul id="usersList"></ul>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="chat-wrapper">
+            <div class="chat-header">
+                <h2 id="roomTitle">💬 Loading...</h2>
+                <span>Logged in as <strong id="usernameDisplay"></strong></span>
+                <a href="/" class="leave-btn">Leave Room</a>
+            </div>
+
+            <div class="messages" id="messages"></div>
+
+            <!-- Emoji Picker -->
+            <div id="emojiPickerContainer" class="emoji-picker-container hidden">
+                <div class="emoji-grid">
+                    <span>😀</span><span>😂</span><span>😍</span><span>😎</span><span>😢</span><span>😡</span><span>🤔</span><span>😴</span>
+                    <span>👍</span><span>👎</span><span>👏</span><span>🙌</span><span>🤝</span><span>🙏</span><span>💪</span><span>🤞</span>
+                    <span>❤️</span><span>🔥</span><span>⭐</span><span>🎉</span><span>🎊</span><span>💯</span><span>✅</span><span>❌</span>
+                    <span>🐶</span><span>🐱</span><span>🦊</span><span>🐻</span><span>🐼</span><span>🦁</span><span>🐸</span><span>🐧</span>
+                    <span>🍕</span><span>🍔</span><span>🍟</span><span>🌮</span><span>🍜</span><span>🍣</span><span>🍰</span><span>🎂</span>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <button class="emoji-btn" id="emojiBtn">😊</button>
+                <!-- Hidden file input -->
+                <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.doc,.docx" style="display:none" />
+                <button class="file-btn" id="fileBtn">📎</button>
+                <input
+                    type="text"
+                    id="messageInput"
+                    placeholder="Type a message..."
+                    autocomplete="off"
+                />
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const username = params.get("username");
+        const room = params.get("room");
+
+        document.getElementById("roomTitle").textContent = "💬 " + room;
+        document.getElementById("usernameDisplay").textContent = username;
+
+        const messages = document.getElementById("messages");
+
+        // Emoji picker
+        document.getElementById("emojiBtn").addEventListener("click", function(e) {
+            e.stopPropagation();
+            document.getElementById("emojiPickerContainer").classList.toggle("hidden");
+        });
+
+        document.querySelectorAll(".emoji-grid span").forEach(span => {
+            span.addEventListener("click", function() {
+                document.getElementById("messageInput").value += this.textContent;
+                document.getElementById("emojiPickerContainer").classList.add("hidden");
+            });
+        });
+
+        document.addEventListener("click", function(e) {
+            const container = document.getElementById("emojiPickerContainer");
+            if (!container.contains(e.target)) {
+                container.classList.add("hidden");
+            }
+        });
+
+        // File upload
+        document.getElementById("fileBtn").addEventListener("click", function() {
+            document.getElementById("fileInput").click();
+        });
+
+        document.getElementById("fileInput").addEventListener("change", async function() {
+            const file = this.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            // Show uploading message
+            addSystemMessage("📤 Uploading " + file.name + "...");
+
+            const res = await fetch("/upload", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await res.json();
+
+            // Send file link via websocket
+            if (data.type.startsWith("image/")) {
+                ws.send(`__file__:${username}:${data.url}:${data.filename}:image`);
+            } else {
+                ws.send(`__file__:${username}:${data.url}:${data.filename}:file`);
+            }
+
+            // Reset file input
+            this.value = "";
+        });
+
+        function addSystemMessage(text) {
+            const msg = document.createElement("div");
+            msg.className = "message system";
+            msg.textContent = text;
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        async function loadHistory() {
+            const res = await fetch(`/history/${room}`);
+            const history = await res.json();
+            history.forEach(item => {
+                if (item.message.startsWith("__file__:")) {
+                    renderFileMessage(item.message, item.username === username);
+                } else {
+                    addMessage(`${item.username}: ${item.message}`, item.username === username, item.timestamp);
+                }
+            });
+        }
+
+        function addMessage(text, isOwn = false, timestamp = null) {
+            const msg = document.createElement("div");
+            msg.className = isOwn ? "message own" : "message";
+
+            const textDiv = document.createElement("div");
+            textDiv.textContent = text;
+            msg.appendChild(textDiv);
+
+            if (timestamp) {
+                const time = document.createElement("div");
+                time.className = "timestamp";
+                const date = new Date(timestamp);
+                time.textContent = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                msg.appendChild(time);
+            }
+
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function renderFileMessage(data, isOwn = false) {
+            // Format: __file__:username:url:filename:type
+            const parts = data.split(":");
+            const sender = parts[1];
+            const url = parts[2] + ":" + parts[3]; // handle http: in url
+            const filename = parts[4];
+            const type = parts[5];
+
+            const msg = document.createElement("div");
+            msg.className = isOwn ? "message own" : "message";
+
+            const senderDiv = document.createElement("div");
+            senderDiv.style.fontSize = "0.8rem";
+            senderDiv.style.marginBottom = "6px";
+            senderDiv.style.opacity = "0.7";
+            senderDiv.textContent = sender + ":";
+            msg.appendChild(senderDiv);
+
+            if (type === "image") {
+                const img = document.createElement("img");
+                img.src = url;
+                img.className = "chat-image";
+                img.onclick = () => window.open(url, "_blank");
+                msg.appendChild(img);
+            } else {
+                const link = document.createElement("a");
+                link.href = url;
+                link.target = "_blank";
+                link.textContent = "📎 " + filename;
+                link.className = "file-link";
+                msg.appendChild(link);
+            }
+
+            const now = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+            const time = document.createElement("div");
+            time.className = "timestamp";
+            time.textContent = now;
+            msg.appendChild(time);
+
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function updateUsers(userList) {
+            const ul = document.getElementById("usersList");
+            ul.innerHTML = "";
+            userList.forEach(u => {
+                const li = document.createElement("li");
+                li.textContent = u;
+                if (u === username) li.style.color = "#e94560";
+                ul.appendChild(li);
+            });
+        }
+
+        const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${room}/${username}`);
+
+        ws.onmessage = function(event) {
+            if (event.data.startsWith("__users__:")) {
+                const users = event.data.replace("__users__:", "").split(",");
+                updateUsers(users);
+                return;
+            }
+
+            if (event.data.startsWith("__file__:")) {
+                const isOwn = event.data.split(":")[1] === username;
+                renderFileMessage(event.data, isOwn);
+                return;
+            }
+
+            const isOwn = event.data.startsWith(username + ":");
+            const now = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+            const msg = document.createElement("div");
+            msg.className = isOwn ? "message own" : "message";
+
+            const textDiv = document.createElement("div");
+            textDiv.textContent = event.data;
+
+            const time = document.createElement("div");
+            time.className = "timestamp";
+            time.textContent = now;
+
+            msg.appendChild(textDiv);
+            msg.appendChild(time);
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        };
+
+        function sendMessage() {
+            const input = document.getElementById("messageInput");
+            if (input.value.trim() !== "") {
+                ws.send(input.value);
+                input.value = "";
+            }
+        }
+
+        document.getElementById("messageInput").addEventListener("keypress", function(e) {
+            if (e.key === "Enter") sendMessage();
+        });
+
+        loadHistory();
+    </script>
+</body>
+</html>
